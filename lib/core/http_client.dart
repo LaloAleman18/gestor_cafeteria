@@ -99,13 +99,30 @@ class ApiClient {
 
   //Direccionamiento de los errores fuera de los 200's y los 300's
   Failure mapHttpError(int code, Object? json) {
+    final detail = _extractDetail(json);
     return switch (code) {
-      404 => const NotFoundFailure('Orden no encontrada'),
-      409 => const ConflictFailure('Acción no permitida'),
+      404 => NotFoundFailure(
+          detail.isNotEmpty ? detail : 'Recurso no encontrado',
+        ),
+      409 => ConflictFailure(
+          detail.isNotEmpty ? detail : 'Conflicto',
+        ),
       422 => ValidationFailure(_fieldsFrom(json)),
       >= 500 && < 600 => ServerFailure(code),
-      _ => UnexpectedFailure(code, 'Error desconocido ($code)'),
+      _ => UnexpectedFailure(
+          code,
+          detail.isNotEmpty ? detail : 'Error desconocido ($code)',
+        ),
     };
+  }
+
+  /// Extrae el mensaje de texto de `detail` cuando es un String.
+  /// Si `detail` no es String o `json` es nulo, devuelve el [fallback].
+  String _extractDetail(Object? json, [String fallback = '']) {
+    if (json is Map && json['detail'] is String) {
+      return json['detail'] as String;
+    }
+    return fallback;
   }
 
   Map<String, String> _fieldsFrom(Object? json) {
