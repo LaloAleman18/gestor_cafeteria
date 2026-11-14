@@ -131,7 +131,9 @@ class ApiClient {
       for (final error in json['detail'] as List) {
         if (error is Map && error['loc'] is List && error['msg'] is String) {
           final loc = error['loc'] as List;
-          if (loc.isNotEmpty) {
+          if (loc.length > 1) {
+            fields[loc[1].toString()] = error['msg'] as String;
+          } else if (loc.isNotEmpty) {
             fields[loc.last.toString()] = error['msg'] as String;
           }
         }
