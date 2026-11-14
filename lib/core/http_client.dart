@@ -1,14 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
-
+ 
 import 'package:flutter/foundation.dart';
 import 'package:gestor_cafeteria/core/failure.dart';
 import 'package:gestor_cafeteria/core/token_storage.dart';
 import 'package:http/http.dart' as http;
-
+ 
 class ApiClient {
-  final http.Client? _client;
-  final Uri? baseUrl;
+  final http.Client _client;
+  final Uri baseUrl;
   final Duration timeout;
   final TokenStorage? _tokens;
   //Clase Client
@@ -44,15 +44,13 @@ class ApiClient {
   Future<dynamic> get(String path) => _send('GET', path);
   Future<dynamic> post(String path, Object body) => _send('POST', path, body);
   Future<dynamic> patch(String path, Object body) => _send('PATCH', path, body);
-  Future<dynamic> update(String path, Object body) =>
-      _send('UPDATE', path, body);
-  Future<dynamic> delete(String path) => _send('DELETE', path);
+  Future<void> delete(String path) => _send('DELETE', path);
 
   //Funcion SEND -> Mandar la peticion al Servicio, esperar una respuesta y adecuarlo para flutter
 
   Future<dynamic> _send(String method, String path, [Object? body]) async {
     //Request: Va arma la peticion con la inyeccion de los HEADERS
-    final request = http.Request(method, baseUrl!.resolve(path))
+    final request = http.Request(method, baseUrl.resolve(path))
       ..headers['Accept'] = 'application/json';
     final token = await _tokens?.read();
     if (token != null) request.headers['Authorization'] = 'Bearer $token';
@@ -65,7 +63,7 @@ class ApiClient {
     final http.Response response;
     //El response se va a tratar segun el caso con el servicio respondio
     try {
-      response = await _client!
+      response = await _client
           .send(request)
           .then(http.Response.fromStream)
           .timeout(timeout);
@@ -80,23 +78,23 @@ class ApiClient {
       await _tokens?.clear();
       throw const UnauthorizedFailure();
     }
-    if (code >= 200 && code <= 300) {
+    if (code >= 200 && code < 300) {
       return json;
     } else {
       throw mapHttpError(code, json);
     }
   }
-
+ 
   dynamic _tryDecode(http.Response response) {
     if (response.bodyBytes.isEmpty) return null;
-
+ 
     try {
       return jsonDecode(utf8.decode(response.bodyBytes));
     } on FormatException {
       return null;
     }
   }
-
+ 
   //Direccionamiento de los errores fuera de los 200's y los 300's
   Failure mapHttpError(int code, Object? json) {
     final detail = _extractDetail(json);
@@ -116,8 +114,9 @@ class ApiClient {
     };
   }
 
-  /// Extrae el mensaje de texto de `detail` cuando es un String.
-  /// Si `detail` no es String o `json` es nulo, devuelve el [fallback].
+  /// Extrae el mensaje de texto de `detail` cuando es un String simple.
+  /// Si `detail` es de otro tipo (como la lista de errores en 422) o `json` es null,
+  /// retorna el mensaje de respaldo [fallback].
   String _extractDetail(Object? json, [String fallback = '']) {
     if (json is Map && json['detail'] is String) {
       return json['detail'] as String;
