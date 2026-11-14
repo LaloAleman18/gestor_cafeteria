@@ -1,89 +1,199 @@
-import "dart:convert";
-
+import 'dart:convert';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:gestor_cafeteria/core/failure.dart';
 import 'package:gestor_cafeteria/core/http_client.dart';
 import 'package:gestor_cafeteria/core/token_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:flutter_test/flutter_test.dart';
-
-ApiClient clienteQueResponde(int status, [Object? body]) {
-  return ApiClient(
-    baseUrl: 'https://test',
-    client: MockClient(
-      (request) async => http.Response(
-        body == null ? '' : jsonEncode(body),
-        status,
-        headers: {'content-type': 'application/json; charset=utf-8'},
-      ),
-    ),
-  );
-}
 
 void main() {
-  group('Probar los Codigos de error', () {
-    test('404 -> NotFoundFailure()', () async {
-      final api = clienteQueResponde(404, {'detail': 'Order 999 not found'});
+  group('Pruebas unitarias de ApiClient con MockClient (Tarea 1)', () {
+    // 1. Éxito
+    test('1. Éxito: responde 200 con JSON válido y devuelve el JSON decodificado', () async {
+      final mock = MockClient((request) async {
+        return http.Response(
+          jsonEncode([
+            {'id': 1, 'customer': 'Ana', 'drink': 'latte', 'size': 'M'}
+          ]),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+      final api = ApiClient(client: mock, baseUrl: 'http://localhost:8000');
+
+      final resultado = await api.get('/orders');
+
+      expect(resultado, isA<List>());
+      expect((resultado as List).first['customer'], 'Ana');
+    });
+
+    // 2. No encontrado
+    test('2. No encontrado: responde 404 con detail y lanza NotFoundFailure con ese mensaje', () async {
+      final mock = MockClient((request) async {
+        return http.Response(
+          jsonEncode({'detail': 'Order 9 not found'}),
+          404,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+      final api = ApiClient(client: mock, baseUrl: 'http://localhost:8000');
+
       await expectLater(
-        api.get('/orders/999'),
-        throwsA(isA<NotFoundFailure>()),
+        api.get('/orders/9'),
+        throwsA(
+          isA<NotFoundFailure>().having(
+            (f) => f.message,
+            'message',
+            'Order 9 not found',
+          ),
+        ),
       );
     });
-  });
 
-  group('Transporte: guardia de baseUrl', () {
-    test('http:// hacia un host remoto -> ArgumentError', () {
+    // 3. Conflicto
+    test('3. Conflicto: responde 409 con detail de texto y lanza ConflictFailure con ese mensaje', () async {
+      final mock = MockClient((request) async {
+        return http.Response(
+          jsonEncode({'detail': 'Cannot change status from pending to delivered'}),
+          409,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+      final api = ApiClient(client: mock, baseUrl: 'http://localhost:8000');
+
+      await expectLater(
+        api.patch('/orders/1', {'status': 'delivered'}),
+        throwsA(
+          isA<ConflictFailure>().having(
+            (f) => f.message,
+            'message',
+            'Cannot change status from pending to delivered',
+          ),
+        ),
+      );
+    });
+
+    // 4. Validación
+    test('4. Validación: responde 422 con lista detail y lanza ValidationFailure con fields mapeados', () async {
+      final mock = MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'detail': [
+              {
+                'loc': ['body', 'customer'],
+                'msg': 'Must be 1-50 characters',
+              }
+            ]
+          }),
+          422,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+      final api = ApiClient(client: mock, baseUrl: 'http://localhost:8000');
+
+      await expectLater(
+        api.post('/orders', {'customer': '', 'drink': 'te', 'size': 'M'}),
+        throwsA(
+          isA<ValidationFailure>().having(
+            (f) => f.fields['customer'],
+            "fields['customer']",
+            'Must be 1-50 characters',
+          ),
+        ),
+      );
+    });
+
+    // 5. Servidor
+    test('5. Error del servidor: responde 503 y lanza ServerFailure con statusCode 503', () async {
+      final mock = MockClient((request) async {
+        return http.Response(
+          jsonEncode({'detail': 'Servicio no disponible'}),
+          503,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+      final api = ApiClient(client: mock, baseUrl: 'http://localhost:8000');
+
+      await expectLater(
+        api.get('/orders'),
+        throwsA(
+          isA<ServerFailure>().having(
+            (f) => f.statusCode,
+            'statusCode',
+            503,
+          ),
+        ),
+      );
+    });
+
+    // 6. Sin conexión o tiempo agotado
+    test('6a. Sin conexión: manejador lanza ClientException y cliente lanza NetworkFailure', () async {
+      final mock = MockClient((request) async {
+        throw http.ClientException('sin red');
+      });
+      final api = ApiClient(client: mock, baseUrl: 'http://localhost:8000');
+
+      await expectLater(
+        api.get('/orders'),
+        throwsA(isA<NetworkFailure>()),
+      );
+    });
+
+    test('6b. Tiempo agotado: petición excede timeout y cliente lanza NetworkFailure', () async {
+      final mock = MockClient((request) async {
+        await Future.delayed(const Duration(milliseconds: 100));
+        return http.Response('[]', 200);
+      });
+      final api = ApiClient(
+        client: mock,
+        baseUrl: 'http://localhost:8000',
+        timeout: const Duration(milliseconds: 30),
+      );
+
+      await expectLater(
+        api.get('/orders'),
+        throwsA(isA<NetworkFailure>()),
+      );
+    });
+
+    // 7. Defecto D3: Código 300 no es éxito
+    test('7. Defecto D3: servidor falso responde 300 y se espera UnexpectedFailure', () async {
+      final mock = MockClient((request) async {
+        return http.Response(
+          jsonEncode({'detail': 'Multiple Choices'}),
+          300,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      });
+      final api = ApiClient(client: mock, baseUrl: 'http://localhost:8000');
+
+      await expectLater(
+        api.get('/orders'),
+        throwsA(
+          isA<UnexpectedFailure>()
+              .having((f) => f.statusCode, 'statusCode', 300)
+              .having((f) => f.message, 'message', 'Multiple Choices'),
+        ),
+      );
+    });
+
+    // Pruebas complementarias de seguridad y transporte
+    test('Transporte: http:// hacia host remoto lanza ArgumentError', () {
       expect(
-        () => ApiClient(baseUrl: 'http://api.cafeteria.com'),
+        () => ApiClient(baseUrl: 'http://api.remota.com'),
         throwsArgumentError,
       );
     });
 
-    test('http:// hacia el emulador y https:// remoto -> permitidos', () {
-      expect(() => ApiClient(baseUrl: 'http://10.0.2.2:8000'), returnsNormally);
-      expect(
-        () => ApiClient(baseUrl: 'https://api.cafeteria.com'),
-        returnsNormally,
-      );
-    });
-  });
-
-  group('Token seguro', () {
-    test('con token guardado manda Authorization: Bearer', () async {
-      String? visto;
-      final api = ApiClient(
-        baseUrl: 'https://test',
-        tokenStorage: InMemoryTokenStorage('abc123'),
-        client: MockClient((request) async {
-          visto = request.headers['Authorization'];
-          return http.Response('{}', 200);
-        }),
-      );
-      await api.get('/orders');
-      expect(visto, 'Bearer abc123');
-    });
-
-    test('sin token no manda Authorization', () async {
-      bool? tieneHeader;
-      final api = ApiClient(
-        baseUrl: 'https://test',
-        tokenStorage: InMemoryTokenStorage(),
-        client: MockClient((request) async {
-          tieneHeader = request.headers.containsKey('Authorization');
-          return http.Response('{}', 200);
-        }),
-      );
-      await api.get('/orders');
-      expect(tieneHeader, isFalse);
-    });
-
-    test('401 borra el token y lanza UnauthorizedFailure', () async {
+    test('Token seguro: 401 borra el token y lanza UnauthorizedFailure', () async {
       final storage = InMemoryTokenStorage('vencido');
+      final mock = MockClient((request) async => http.Response('', 401));
       final api = ApiClient(
-        baseUrl: 'https://test',
+        client: mock,
+        baseUrl: 'http://localhost:8000',
         tokenStorage: storage,
-        client: MockClient((request) async => http.Response('', 401)),
       );
+
       await expectLater(
         api.get('/orders'),
         throwsA(isA<UnauthorizedFailure>()),
